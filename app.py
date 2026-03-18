@@ -2,34 +2,33 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import StringIO
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 # ---------------------------
-# PAGE CONFIG
+# CONFIG
 # ---------------------------
 st.set_page_config(page_title="NSE Trends Dashboard", layout="wide")
-st.title("NSE Participant Trends Dashboard")
+st.title("NSE Participant Trend Dashboard")
 
 BASE_URL = "https://nsearchives.nseindia.com/content/nsccl/"
 headers = {"User-Agent": "Mozilla/5.0"}
 
+
 # ---------------------------
-# FETCH FUNCTION (CACHED)
+# FETCH (CACHED)
 # ---------------------------
 @st.cache_data
 def fetch_csv(date_str):
     url = BASE_URL + f"fao_participant_oi_{date_str}.csv"
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-
-        if response.status_code == 200:
-            return pd.read_csv(StringIO(response.text))
-        else:
-            return None
-
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return pd.read_csv(StringIO(res.text))
     except:
-        return None
+        pass
+
+    return None
 
 
 # ---------------------------
@@ -60,15 +59,14 @@ def clean_nse(df):
         .str.replace(r"[^a-z0-9_]", "", regex=True)
     )
 
-    # Remove totals
-    if "client_type" in df.columns:
-        df = df[~df["client_type"].str.contains("total", case=False, na=False)]
+    # Remove TOTAL rows
+    df = df[~df["client_type"].str.contains("total", case=False, na=False)]
 
     # Convert numeric columns
     for col in df.columns:
         if col != "client_type":
             df[col] = df[col].astype(str).str.replace(",", "")
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
 
@@ -86,7 +84,7 @@ if start_date and end_date:
         st.stop()
 
     if (end_date - start_date).days > 31:
-        st.warning("Please select max 1 month range")
+        st.warning("Max 1 month range allowed")
         st.stop()
 
     # ---------------------------
@@ -129,48 +127,59 @@ if start_date and end_date:
     full_df = pd.concat(all_data, ignore_index=True)
 
     # ---------------------------
-    # CREATE NET METRICS
+    # AUTO CREATE NET COLUMNS
     # ---------------------------
-    if "index_futures_long" in full_df.columns and "index_futures_short" in full_df.columns:
-        full_df["net_futures"] = (
-            full_df["index_futures_long"] - full_df["index_futures_short"]
-        )
+    net_columns = []
+
+    for col in full_df.columns:
+        if col.endswith("_long"):
+            base = col.replace("_long", "")
+            short_col = base + "_short"
+
+            if short_col in full_df.columns:
+                net_col = base + "_net"
+
+                full_df[net_col] = full_df[col] - full_df[short_col]
+                net_columns.append(net_col)
 
     # ---------------------------
-    # UI SELECTIONS
+    # UI SELECTION
     # ---------------------------
     st.subheader("Filters")
 
     col1, col2 = st.columns(2)
 
     with col1:
-        participants = full_df["client_type"].unique()
-        selected_participant = st.selectbox("Select Participant", participants)
+        participant = st.selectbox(
+            "Select Participant",
+            sorted(full_df["client_type"].unique())
+        )
 
     with col2:
-        numeric_cols = full_df.select_dtypes(include=["number"]).columns.tolist()
-        selected_metric = st.selectbox("Select Metric", numeric_cols)
+        metric = st.selectbox(
+            "Select Metric (Net Values)",
+            sorted(net_columns)
+        )
 
     # ---------------------------
     # FILTER DATA
     # ---------------------------
-    filtered_df = full_df[full_df["client_type"] == selected_participant]
+    df_filtered = full_df[full_df["client_type"] == participant]
+    df_filtered = df_filtered.sort_values("date")
 
     # ---------------------------
-    # PLOT
+    # GRAPH
     # ---------------------------
-    st.subheader("Trend")
-
-    plot_df = filtered_df.sort_values("date")
+    st.subheader("Trend Graph")
 
     st.line_chart(
-        plot_df.set_index("date")[selected_metric]
+        df_filtered.set_index("date")[metric]
     )
 
     # ---------------------------
-    # SHOW TABLE (OPTIONAL)
+    # OPTIONAL TABLE
     # ---------------------------
-    with st.expander("View Raw Data"):
-        st.dataframe(filtered_df, use_container_width=True)
+    with st.expander("View Data"):
+        st.dataframe(df_filtered, use_container_width=True)
 
     st.success("Done")
